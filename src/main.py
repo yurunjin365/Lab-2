@@ -29,7 +29,8 @@ from recall.itemcf import (itemcf_sim, itemcf_recall_batch, hot_recall,
 from recall.embedding import embedding_sim, embedding_recall_batch
 
 from features.feature_engineering import (create_user_features, create_item_features,
-                                          make_train_set, make_test_set)
+                                          make_train_set, make_test_set,
+                                          make_candidate_set, add_features)
 
 from models.lgb_ranker import (train_lgb_ranker, train_lgb_classifier,
                                predict_lgb, negative_sampling)
@@ -137,10 +138,21 @@ def main():
 
     # ==================== 2. 多路召回 ====================
     logger.info('\n【步骤2】多路召回')
+    
+    # 定义缓存路径
+    itemcf_sim_path = 'user_data/itemcf_i2i_sim.pkl'
+    emb_sim_path = 'user_data/emb_i2i_sim.pkl'
+    trn_itemcf_recall_path = 'user_data/recall_results/trn_itemcf_recall.pkl'
+    tst_itemcf_recall_path = 'user_data/recall_results/tst_itemcf_recall.pkl'
+    trn_emb_recall_path = 'user_data/recall_results/trn_emb_recall.pkl'
+    tst_emb_recall_path = 'user_data/recall_results/tst_emb_recall.pkl'
+    trn_merged_recall_path = 'user_data/recall_results/trn_recall.pkl'
+    tst_merged_recall_path = 'user_data/recall_results/tst_recall.pkl'
 
     # 2.1 ItemCF召回
     logger.info('\n--- ItemCF召回 ---')
-    itemcf_sim_path = 'user_data/itemcf_i2i_sim.pkl'
+    
+    # 加载或计算ItemCF相似度矩阵
     if os.path.exists(itemcf_sim_path):
         logger.info('加载已有的ItemCF相似度矩阵...')
         with open(itemcf_sim_path, 'rb') as f:
@@ -149,17 +161,30 @@ def main():
         logger.info('计算ItemCF相似度矩阵...')
         i2i_sim = itemcf_sim(all_click_df, item_created_time_dict, itemcf_sim_path)
 
-    # 训练集召回（用于离线评估）
-    logger.info('训练集召回（用于构建训练数据）...')
-    trn_user_recall_itemcf = itemcf_recall_batch(trn_click, i2i_sim, top_k=10, item_num=100)
+    # 加载或计算训练集ItemCF召回
+    if os.path.exists(trn_itemcf_recall_path):
+        logger.info('加载已有的训练集ItemCF召回结果...')
+        trn_user_recall_itemcf = load_pickle(trn_itemcf_recall_path)
+    else:
+        logger.info('训练集召回（用于构建训练数据）...')
+        trn_user_recall_itemcf = itemcf_recall_batch(trn_click, i2i_sim, top_k=10, item_num=100)
+        save_pickle(trn_user_recall_itemcf, trn_itemcf_recall_path)
+        logger.info(f'训练集ItemCF召回结果已缓存: {trn_itemcf_recall_path}')
 
-    # 测试集召回
-    logger.info('测试集召回...')
-    tst_user_recall_itemcf = itemcf_recall_batch(tst_click, i2i_sim, top_k=10, item_num=100)
+    # 加载或计算测试集ItemCF召回
+    if os.path.exists(tst_itemcf_recall_path):
+        logger.info('加载已有的测试集ItemCF召回结果...')
+        tst_user_recall_itemcf = load_pickle(tst_itemcf_recall_path)
+    else:
+        logger.info('测试集召回...')
+        tst_user_recall_itemcf = itemcf_recall_batch(tst_click, i2i_sim, top_k=10, item_num=100)
+        save_pickle(tst_user_recall_itemcf, tst_itemcf_recall_path)
+        logger.info(f'测试集ItemCF召回结果已缓存: {tst_itemcf_recall_path}')
 
     # 2.2 Embedding召回
     logger.info('\n--- Embedding召回 ---')
-    emb_sim_path = 'user_data/emb_i2i_sim.pkl'
+    
+    # 加载或计算Embedding相似度矩阵
     if os.path.exists(emb_sim_path):
         logger.info('加载已有的Embedding相似度矩阵...')
         with open(emb_sim_path, 'rb') as f:
@@ -168,39 +193,59 @@ def main():
         logger.info('计算Embedding相似度矩阵...')
         emb_i2i_sim = embedding_sim(item_emb_df, emb_sim_path, topk=20)
 
-    # 训练集召回
-    logger.info('训练集Embedding召回...')
-    trn_user_recall_emb = embedding_recall_batch(trn_click, emb_i2i_sim, top_k=10, item_num=100)
+    # 加载或计算训练集Embedding召回
+    if os.path.exists(trn_emb_recall_path):
+        logger.info('加载已有的训练集Embedding召回结果...')
+        trn_user_recall_emb = load_pickle(trn_emb_recall_path)
+    else:
+        logger.info('训练集Embedding召回...')
+        trn_user_recall_emb = embedding_recall_batch(trn_click, emb_i2i_sim, top_k=10, item_num=100)
+        save_pickle(trn_user_recall_emb, trn_emb_recall_path)
+        logger.info(f'训练集Embedding召回结果已缓存: {trn_emb_recall_path}')
 
-    # 测试集召回
-    logger.info('测试集Embedding召回...')
-    tst_user_recall_emb = embedding_recall_batch(tst_click, emb_i2i_sim, top_k=10, item_num=100)
+    # 加载或计算测试集Embedding召回
+    if os.path.exists(tst_emb_recall_path):
+        logger.info('加载已有的测试集Embedding召回结果...')
+        tst_user_recall_emb = load_pickle(tst_emb_recall_path)
+    else:
+        logger.info('测试集Embedding召回...')
+        tst_user_recall_emb = embedding_recall_batch(tst_click, emb_i2i_sim, top_k=10, item_num=100)
+        save_pickle(tst_user_recall_emb, tst_emb_recall_path)
+        logger.info(f'测试集Embedding召回结果已缓存: {tst_emb_recall_path}')
 
     # 2.3 融合召回
     logger.info('\n--- 融合召回 ---')
-    trn_user_recall_merged = merge_recall_results(
-        [trn_user_recall_itemcf, trn_user_recall_emb],
-        weights=[0.6, 0.4],
-        topk=150
-    )
+    
+    # 检查是否有融合后的缓存
+    if os.path.exists(trn_merged_recall_path) and os.path.exists(tst_merged_recall_path):
+        logger.info('加载已有的融合召回结果...')
+        trn_user_recall_merged = load_pickle(trn_merged_recall_path)
+        tst_user_recall_merged = load_pickle(tst_merged_recall_path)
+    else:
+        trn_user_recall_merged = merge_recall_results(
+            [trn_user_recall_itemcf, trn_user_recall_emb],
+            weights=[0.6, 0.4],
+            topk=150
+        )
 
-    tst_user_recall_merged = merge_recall_results(
-        [tst_user_recall_itemcf, tst_user_recall_emb],
-        weights=[0.6, 0.4],
-        topk=150
-    )
+        tst_user_recall_merged = merge_recall_results(
+            [tst_user_recall_itemcf, tst_user_recall_emb],
+            weights=[0.6, 0.4],
+            topk=150
+        )
 
-    # 填充缺失用户
-    trn_user_recall_merged = fill_missing_users(trn_user_recall_merged,
-                                                trn_click['user_id'].unique(),
-                                                hot_items)
-    tst_user_recall_merged = fill_missing_users(tst_user_recall_merged,
-                                                tst_click['user_id'].unique(),
-                                                hot_items)
+        # 填充缺失用户
+        trn_user_recall_merged = fill_missing_users(trn_user_recall_merged,
+                                                    trn_click['user_id'].unique(),
+                                                    hot_items)
+        tst_user_recall_merged = fill_missing_users(tst_user_recall_merged,
+                                                    tst_click['user_id'].unique(),
+                                                    hot_items)
 
-    # 保存召回结果
-    save_pickle(trn_user_recall_merged, 'user_data/recall_results/trn_recall.pkl')
-    save_pickle(tst_user_recall_merged, 'user_data/recall_results/tst_recall.pkl')
+        # 保存融合召回结果
+        save_pickle(trn_user_recall_merged, trn_merged_recall_path)
+        save_pickle(tst_user_recall_merged, tst_merged_recall_path)
+        logger.info('融合召回结果已缓存')
 
     # ==================== 3. 离线验证划分 ====================
     logger.info('\n【步骤3】划分训练集和验证集')
@@ -219,17 +264,21 @@ def main():
     logger.info(f'训练集历史点击数: {len(trn_hist_click)}')
     logger.info(f'验证集点击数: {len(val_click)}')
 
-    # ==================== 4. 特征工程 ====================
+    # ==================== 4. 特征工程（优化：先负采样，后特征工程） ====================
     logger.info('\n【步骤4】特征工程')
 
-    # 构建训练集特征
-    logger.info('构建训练集特征...')
-    train_df = make_train_set(trn_hist_click, val_click, trn_user_recall_merged,
-                             all_click_df, item_info_df, is_val=True)
+    # 4.1 构建候选集（仅基础信息，不做特征工程）
+    logger.info('构建候选集...')
+    candidate_df = make_candidate_set(val_click, trn_user_recall_merged)
 
-    # 负采样
+    # 4.2 负采样（在特征工程之前，大幅减少后续计算量）
     logger.info('负采样...')
-    train_df = negative_sampling(train_df, neg_ratio=5, method='smart')
+    candidate_df = negative_sampling(candidate_df, neg_ratio=5, method='smart')
+    logger.info(f'负采样后样本数: {len(candidate_df)}')
+
+    # 4.3 为负采样后的候选集添加特征
+    logger.info('构建特征（负采样后）...')
+    train_df = add_features(candidate_df, trn_hist_click, all_click_df, item_info_df)
 
     # 保存特征
     train_df.to_pickle('user_data/features/train_features.pkl')

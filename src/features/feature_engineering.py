@@ -204,44 +204,61 @@ def create_cross_features(user_hist_df, candidate_df, user_features, item_featur
     return df
 
 
-def make_train_set(trn_click, val_click, user_recall_dict, all_click_df, item_info_df,
-                   is_val=True):
+def make_candidate_set(val_click, user_recall_dict):
     """
-    构建训练集/验证集
-
+    构建候选集（仅包含基础信息，不做特征工程）
+    
     Args:
-        trn_click: 训练集历史点击（用于构建特征）
         val_click: 验证集点击（作为标签）
         user_recall_dict: 召回结果 {user_id: [(item_id, score), ...]}
-        all_click_df: 所有点击数据（用于构建特征）
-        item_info_df: 文章信息
-        is_val: 是否是验证集
-
+    
     Returns:
-        train_df: 训练集DataFrame，包含label列
+        candidate_df: 候选集DataFrame，包含user_id, click_article_id, recall_score, label
     """
-    logger.info(f'开始构建{"验证" if is_val else "训练"}集...')
+    logger.info('开始构建候选集...')
 
-    # 构建候选集
     candidates = []
     labels = []
 
-    val_labels = dict(zip(val_click['user_id'], val_click['click_article_id']))
+    # 确保数据类型一致（转为Python int）
+    val_labels = dict(zip(
+        val_click['user_id'].astype(int).values, 
+        val_click['click_article_id'].astype(int).values
+    ))
 
+    hit_count = 0
     for user_id, recall_items in tqdm(user_recall_dict.items(), desc='构建候选集'):
-        if user_id not in val_labels:
+        user_id_int = int(user_id)
+        if user_id_int not in val_labels:
             continue
 
-        true_item = val_labels[user_id]
+        true_item = val_labels[user_id_int]
+        recall_item_ids = set()
 
         for item_id, score in recall_items:
+            item_id_int = int(item_id)
+            recall_item_ids.add(item_id_int)
             candidates.append({
-                'user_id': user_id,
-                'click_article_id': item_id,
+                'user_id': user_id_int,
+                'click_article_id': item_id_int,
                 'recall_score': score
             })
-            # 标签：1表示真实点击，0表示未点击
-            labels.append(1 if item_id == true_item else 0)
+            is_hit = (item_id_int == true_item)
+            labels.append(1 if is_hit else 0)
+            if is_hit:
+                hit_count += 1
+        
+        # 强制添加正样本
+        if true_item not in recall_item_ids:
+            candidates.append({
+                'user_id': user_id_int,
+                'click_article_id': true_item,
+                'recall_score': 0.0
+            })
+            labels.append(1)
+            hit_count += 1
+    
+    logger.info(f'召回命中用户数（含强制添加）: {hit_count}')
 
     candidate_df = pd.DataFrame(candidates)
     candidate_df['label'] = labels
@@ -249,16 +266,57 @@ def make_train_set(trn_click, val_click, user_recall_dict, all_click_df, item_in
     logger.info(f'候选集大小: {len(candidate_df)}')
     logger.info(f'正样本数: {sum(labels)}, 负样本数: {len(labels) - sum(labels)}')
 
-    # 合并文章信息
-    candidate_df = candidate_df.merge(item_info_df, on='click_article_id', how='left')
+    return candidate_df
 
+
+def add_features(candidate_df, hist_click, all_click_df, item_info_df):
+    """
+    为候选集添加特征（在负采样之后调用，大幅减少计算量）
+    
+    Args:
+        candidate_df: 候选集（已负采样）
+        hist_click: 历史点击数据（用于构建交叉特征）
+        all_click_df: 所有点击数据（用于构建特征）
+        item_info_df: 文章信息
+    
+    Returns:
+        train_df: 带特征的训练集
+    """
+    logger.info(f'开始为候选集添加特征，样本数: {len(candidate_df)}')
+    
     # 构建用户和文章特征
     user_features = create_user_features(all_click_df)
     item_features = create_item_features(all_click_df, item_info_df)
 
+    # 将用户历史点击与文章信息合并
+    hist_click_with_info = hist_click.merge(
+        item_info_df[['click_article_id', 'category_id', 'words_count', 'created_at_ts']],
+        on='click_article_id',
+        how='left'
+    )
+
     # 构建交叉特征
     tqdm.pandas(desc='构建交叉特征')
-    train_df = create_cross_features(trn_click, candidate_df, user_features, item_features)
+    train_df = create_cross_features(hist_click_with_info, candidate_df, user_features, item_features)
+
+    logger.info(f'特征构建完成，shape: {train_df.shape}')
+
+    return train_df
+
+
+def make_train_set(trn_click, val_click, user_recall_dict, all_click_df, item_info_df,
+                   is_val=True):
+    """
+    构建训练集/验证集（旧接口，为兼容性保留）
+    注意：推荐使用 make_candidate_set + negative_sampling + add_features 的新流程
+    """
+    logger.info(f'开始构建{"验证" if is_val else "训练"}集（旧流程）...')
+    
+    # 构建候选集
+    candidate_df = make_candidate_set(val_click, user_recall_dict)
+    
+    # 添加特征
+    train_df = add_features(candidate_df, trn_click, all_click_df, item_info_df)
 
     logger.info(f'{"验证" if is_val else "训练"}集构建完成，shape: {train_df.shape}')
 
@@ -294,16 +352,23 @@ def make_test_set(tst_click, user_recall_dict, all_click_df, item_info_df):
     candidate_df = pd.DataFrame(candidates)
     logger.info(f'测试候选集大小: {len(candidate_df)}')
 
-    # 合并文章信息
-    candidate_df = candidate_df.merge(item_info_df, on='click_article_id', how='left')
+    # 注意：不在这里合并item_info_df，因为create_cross_features中会通过item_features添加
+    # candidate_df = candidate_df.merge(item_info_df, on='click_article_id', how='left')
 
     # 构建用户和文章特征
     user_features = create_user_features(all_click_df)
     item_features = create_item_features(all_click_df, item_info_df)
 
+    # 将用户历史点击与文章信息合并（添加category_id, words_count, created_at_ts列）
+    tst_click_with_info = tst_click.merge(
+        item_info_df[['click_article_id', 'category_id', 'words_count', 'created_at_ts']],
+        on='click_article_id',
+        how='left'
+    )
+
     # 构建交叉特征
     tqdm.pandas(desc='构建交叉特征')
-    test_df = create_cross_features(tst_click, candidate_df, user_features, item_features)
+    test_df = create_cross_features(tst_click_with_info, candidate_df, user_features, item_features)
 
     logger.info(f'测试集构建完成，shape: {test_df.shape}')
 

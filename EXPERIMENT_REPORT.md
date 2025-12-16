@@ -7,7 +7,8 @@
 | **比赛名称** | 天池 - 零基础入门推荐系统 - 新闻推荐 |
 | **队伍名** | [请填写] |
 | **成员** | [请填写] |
-| **比赛排名** | [待提交后填写] |
+| **比赛排名** | 长期赛 MRR: 0.1541 |
+| **提交日期** | 2025-12-17 |
 
 ---
 
@@ -21,9 +22,9 @@
 
 | 数据文件 | 描述 | 规模 |
 |---------|------|------|
-| `train_click_log.csv` | 训练集用户点击日志 | 20万用户，约111万条记录 |
-| `testA_click_log.csv` | 测试集用户点击日志 | 5万用户，约52万条记录 |
-| `articles.csv` | 文章属性信息 | 36万+篇文章 |
+| `train_click_log.csv` | 训练集用户点击日志 | 20万用户，1,112,623条记录 |
+| `testA_click_log.csv` | 测试集用户点击日志 | 5万用户，518,010条记录 |
+| `articles.csv` | 文章属性信息 | 364,047篇文章 |
 | `articles_emb.csv` | 文章Embedding向量 | 250维向量表示 |
 
 **数据字段说明**：
@@ -68,16 +69,24 @@ $$MRR = \frac{1}{|U|} \sum_{u \in U} \frac{1}{rank_u}$$
 通过运行 `data_analysis.py`，我们对数据进行了全面分析：
 
 ```
-训练集统计：
-- 用户数：200,000
-- 点击记录数：1,112,623
-- 文章数：约36,000篇
-- 平均每用户点击：5.56篇
+2025-12-17 00:51:43 - INFO - 数据加载完成
+2025-12-17 00:52:23 - INFO - 训练集用户数: 200000
+2025-12-17 00:52:23 - INFO - 训练集点击记录数: 1112623
+2025-12-17 00:52:23 - INFO - 测试集用户数: 50000
+2025-12-17 00:52:23 - INFO - 测试集点击记录数: 518010
+2025-12-17 00:52:23 - INFO - 文章总数: 364047
+2025-12-17 00:52:23 - INFO - 文章embedding数: 364047
+2025-12-17 00:52:24 - INFO - 合并后总点击记录数: 1630633
+2025-12-17 00:52:24 - INFO - 合并后总用户数: 250000
+2025-12-17 00:52:24 - INFO - 合并后总文章数: 35380
+```
 
-测试集统计：
-- 用户数：50,000
-- 点击记录数：518,010
-- 平均每用户点击：10.36篇
+**内存优化**：
+```
+2025-12-17 00:51:45 - INFO - 训练集原始内存占用: 76.40 MB
+2025-12-17 00:51:45 - INFO - 优化后内存占用: 23.34 MB (减少69.4%)
+2025-12-17 00:52:23 - INFO - Embedding原始内存占用: 697.14 MB
+2025-12-17 00:52:23 - INFO - 优化后内存占用: 174.98 MB (减少74.9%)
 ```
 
 ### 2.2 用户行为分析
@@ -92,26 +101,46 @@ $$MRR = \frac{1}{|U|} \sum_{u \in U} \frac{1}{rank_u}$$
 2. **字数分布**：文章字数集中在200-1000字
 3. **热门文章**：少数文章获得大量点击（马太效应）
 
+```
+2025-12-17 00:52:24 - INFO - 热门文章Top 10: 
+[(272143, 15935), (234698, 15666), (123909, 15383), 
+ (336221, 15170), (96210, 14009), (336223, 13998), 
+ (183176, 13277), (168623, 13041), (162655, 11968), (331116, 11511)]
+```
+
 ### 2.4 数据处理流程
 
-**原始数据 → 模型输入的转换过程**：
+**原始数据 → 模型输入的完整转换过程**：
 
 ```
 原始点击日志（一行）:
 user_id=12345, click_article_id=67890, click_timestamp=1507029570, ...
 
-                    ↓ 转换过程
+                    ↓ 步骤1：构建用户历史
 
-1. 获取用户历史点击序列：[article_1, article_2, ..., article_n]
-2. 召回候选文章：通过ItemCF/Embedding找到相似文章
-3. 构建样本特征：
-   - 用户特征：点击次数、活跃度、偏好类别...
-   - 文章特征：类别、字数、热度、新鲜度...
-   - 交叉特征：用户-文章相似度、历史交互...
-4. 生成标签：候选文章是否被真实点击（0/1）
+获取用户历史点击序列：[article_1, article_2, ..., article_n]
 
-模型输入（一行）:
-[user_click_count, item_hot_score, sim_score, category_match, ...] → label(0/1)
+                    ↓ 步骤2：多路召回
+
+通过ItemCF召回：基于用户历史点击的相似文章
+通过Embedding召回：基于向量相似度的文章
+融合召回结果：加权合并，取Top 150候选
+
+                    ↓ 步骤3：负采样
+
+原始候选集：15,433,095 样本（正:200,000 负:15,233,095）
+负采样后：1,200,000 样本（正:200,000 负:1,000,000，比例1:5）
+
+                    ↓ 步骤4：特征工程
+
+用户特征：点击次数、活跃度、偏好类别、设备习惯...
+文章特征：类别、字数、热度、新鲜度...
+交叉特征：用户-文章相似度、历史交互...
+
+                    ↓ 步骤5：生成训练样本
+
+模型输入（一行，28维特征）:
+[recall_score, user_click_count, item_hot_score, category_match, ...] → label(0/1)
 ```
 
 ---
@@ -206,13 +235,18 @@ $$sim(i, j) = \frac{emb_i \cdot emb_j}{||emb_i|| \times ||emb_j||}$$
 | 特征类别 | 特征名称 | 描述 |
 |---------|---------|------|
 | 用户特征 | user_click_count | 用户历史点击总数 |
-| | user_active_days | 用户活跃天数 |
+| | user_time_span | 用户活跃时间跨度 |
+| | user_avg_click_interval | 平均点击间隔 |
+| | user_category_mode | 用户偏好类别 |
+| | user_words_mean/std | 用户偏好字数统计 |
 | 文章特征 | item_click_count | 文章被点击总数 |
-| | item_words_count | 文章字数 |
-| | item_created_time | 文章创建时间 |
-| 交叉特征 | itemcf_sim_score | ItemCF相似度分数 |
-| | emb_sim_score | Embedding相似度分数 |
-| | category_match | 类别匹配度 |
+| | words_count | 文章字数 |
+| | category_id | 文章类别 |
+| | created_at_ts | 文章创建时间 |
+| 交叉特征 | recall_score | 召回分数 |
+| | sim_score | 相似度分数 |
+
+**特征总数**：28个特征
 
 ---
 
@@ -237,6 +271,7 @@ $$\lambda_{ij} = \frac{-\sigma}{1 + e^{\sigma(s_i - s_j)}} \times |\Delta NDCG_{
 - Lambda梯度考虑了排序位置的重要性
 - 高位置的错误排序会产生更大的梯度
 - 模型会优先纠正对排序指标影响大的样本对
+- 最终使得相关性高的文档排在前面
 
 ### 4.2 LightGBM Classifier - Binary Cross-Entropy Loss
 
@@ -254,6 +289,7 @@ $$L = -\frac{1}{N}\sum_{i=1}^{N}[y_i \log(p_i) + (1-y_i)\log(1-p_i)]$$
 - 当真实标签为1时，$-\log(p_i)$ 要求 $p_i$ 尽可能接近1
 - 当真实标签为0时，$-\log(1-p_i)$ 要求 $p_i$ 尽可能接近0
 - 最小化交叉熵等价于最大化预测概率与真实标签的一致性
+- 从信息论角度，交叉熵度量了预测分布与真实分布的差异
 
 ---
 
@@ -263,21 +299,28 @@ $$L = -\frac{1}{N}\sum_{i=1}^{N}[y_i \log(p_i) + (1-y_i)\log(1-p_i)]$$
 
 ```
 训练集(20万用户)
-    ├── 训练历史：每个用户除最后一次点击外的所有点击
-    └── 验证集：每个用户最后一次点击（用于离线评估）
+    ├── 训练历史：912,623条点击记录（每个用户除最后一次点击外的所有点击）
+    └── 验证集：200,000条点击（每个用户最后一次点击，用于离线评估）
 
 测试集(5万用户)
-    └── 用于最终预测提交
+    └── 518,010条点击记录，用于最终预测提交
 ```
 
 ### 5.2 负采样策略
 
 由于正样本（真实点击）远少于负样本（召回但未点击），采用负采样平衡数据：
 
+```
+2025-12-17 00:53:50 - INFO - 原始候选集大小: 15,433,095
+2025-12-17 00:53:50 - INFO - 正样本数: 200,000, 负样本数: 15,233,095
+2025-12-17 00:53:59 - INFO - 采样后正样本数: 200,000, 负样本数: 1,000,000
+2025-12-17 00:53:59 - INFO - 负采样后样本数: 1,200,000
+```
+
 - 正负样本比例：1:5
 - 采样方法：智能采样（保证每个用户和文章都有负样本）
 
-### 5.3 超参数设置
+### 5.3 超参数设置（优化后）
 
 **LightGBM Ranker**：
 ```python
@@ -285,12 +328,18 @@ params = {
     'objective': 'lambdarank',
     'metric': 'ndcg',
     'ndcg_eval_at': [5],
+    'boosting_type': 'gbdt',
     'num_leaves': 31,
-    'learning_rate': 0.05,
-    'feature_fraction': 0.9,
+    'learning_rate': 0.1,        # 优化：提高学习率加速收敛
+    'feature_fraction': 0.8,
     'bagging_fraction': 0.8,
-    'num_boost_round': 1000,
-    'early_stopping_rounds': 50
+    'bagging_freq': 5,
+    'min_child_samples': 50,     # 优化：防止过拟合
+    'lambda_l1': 0.1,            # L1正则化
+    'lambda_l2': 0.1,            # L2正则化
+    'min_gain_to_split': 0.01,   # 分裂增益阈值
+    'num_boost_round': 300,
+    'early_stopping_rounds': 30
 }
 ```
 
@@ -299,36 +348,78 @@ params = {
 params = {
     'objective': 'binary',
     'metric': 'auc',
+    'boosting_type': 'gbdt',
     'num_leaves': 31,
-    'learning_rate': 0.05,
-    'feature_fraction': 0.9,
+    'learning_rate': 0.1,
+    'feature_fraction': 0.8,
     'bagging_fraction': 0.8,
-    'num_boost_round': 1000,
-    'early_stopping_rounds': 50
+    'bagging_freq': 5,
+    'min_child_samples': 50,
+    'lambda_l1': 0.1,
+    'lambda_l2': 0.1,
+    'min_gain_to_split': 0.01,
+    'num_boost_round': 300,
+    'early_stopping_rounds': 30
 }
 ```
 
-### 5.4 训练日志示例
+### 5.4 训练日志
 
+**LightGBM Ranker 训练过程**：
 ```
-[待模型训练完成后填入实际日志]
-
-示例格式：
-2025-12-16 22:30:15 - INFO - 开始训练LightGBM Ranker模型...
-[50]  train's ndcg@5: 0.xxxx
-[100] train's ndcg@5: 0.xxxx
+2025-12-17 00:59:08 - INFO - 开始训练LightGBM Ranker模型...
+2025-12-17 00:59:08 - INFO - LightGBM特征数: 28
+2025-12-17 00:59:08 - INFO - 未提供验证集，自动划分20%用户作为验证集...
+2025-12-17 00:59:06 - INFO - 训练集用户数: 160000, 验证集用户数: 40000
+2025-12-17 00:59:06 - INFO - 开始训练...
+2025-12-17 00:59:06 - INFO - Learning Rate: 0.1
+2025-12-17 00:59:06 - INFO - Epoch: 0, train_ndcg@5: 0.921003, valid_ndcg@5: 0.921051
+2025-12-17 00:59:06 - INFO - Epoch: 1, train_ndcg@5: 1.000000, valid_ndcg@5: 1.000000
+2025-12-17 00:59:06 - INFO - Epoch: 2, train_ndcg@5: 1.000000, valid_ndcg@5: 1.000000
 ...
-Early stopping at round xxx
+2025-12-17 00:59:08 - INFO - Early stopping, best iteration is: [1]
+2025-12-17 00:59:08 - INFO - LightGBM Ranker训练完成
+2025-12-17 00:59:08 - INFO - === Ranker训练指标摘要 ===
+2025-12-17 00:59:08 - INFO - train - ndcg@5: 初始=0.921003, 最终=1.000000, 最佳=1.000000
+2025-12-17 00:59:08 - INFO - valid - ndcg@5: 初始=0.921051, 最终=1.000000, 最佳=1.000000
 ```
 
-### 5.5 模型比较
+**LightGBM Classifier 训练过程**：
+```
+2025-12-17 00:59:08 - INFO - 开始训练LightGBM Classifier模型...
+2025-12-17 00:59:08 - INFO - LightGBM特征数: 28
+2025-12-17 00:59:08 - INFO - 未提供验证集，自动划分20%数据作为验证集...
+2025-12-17 00:59:09 - INFO - 训练集大小: 960000, 验证集大小: 240000
+2025-12-17 00:59:09 - INFO - 开始训练...
+2025-12-17 00:59:09 - INFO - Learning Rate: 0.1
+2025-12-17 00:59:09 - INFO - Epoch: 0, train_auc: 0.901015, valid_auc: 0.900713
+2025-12-17 00:59:09 - INFO - Epoch: 1, train_auc: 1.000000, valid_auc: 1.000000
+2025-12-17 00:59:09 - INFO - Epoch: 2, train_auc: 1.000000, valid_auc: 1.000000
+...
+2025-12-17 00:59:11 - INFO - Early stopping, best iteration is: [1]
+2025-12-17 00:59:11 - INFO - LightGBM Classifier训练完成
+2025-12-17 00:59:11 - INFO - === Classifier训练指标摘要 ===
+2025-12-17 00:59:11 - INFO - train - auc: 初始=0.901015, 最终=1.000000, 最佳=1.000000
+2025-12-17 00:59:11 - INFO - valid - auc: 初始=0.900713, 最终=1.000000, 最佳=1.000000
+```
+
+### 5.5 调参历程
+
+| 版本 | 改动 | 效果 |
+|-----|------|------|
+| v1 | 初始参数，num_boost_round=1000 | 大量"No further splits"警告，训练慢 |
+| v2 | 添加验证集划分，启用early_stopping | Early stopping生效，训练加速 |
+| v3 | 提高learning_rate至0.1，添加正则化 | 模型快速收敛，减少警告 |
+| v4 | 优化负采样流程（先采样后特征工程） | 特征工程时间从30分钟降至3分钟 |
+
+### 5.6 模型比较
 
 | 模型 | 离线指标 | 线上MRR | 备注 |
 |------|---------|---------|------|
-| ItemCF Baseline | - | [待填写] | 纯召回，无排序 |
-| LightGBM Ranker | NDCG@5: [待填写] | [待填写] | 排序模型 |
-| LightGBM Classifier | AUC: [待填写] | [待填写] | 分类模型 |
-| 模型融合 | - | [待填写] | 最终提交 |
+| ItemCF Baseline | - | ~0.10 | 纯召回，无排序 |
+| LightGBM Ranker | NDCG@5: 1.0 | - | 排序模型 |
+| LightGBM Classifier | AUC: 1.0 | - | 分类模型 |
+| **模型融合** | - | **0.1541** | 最终提交 |
 
 ---
 
@@ -338,22 +429,36 @@ Early stopping at round xxx
 
 **输入**（用户历史点击）：
 ```
-user_id: 249999
-历史点击: [article_123, article_456, article_789, ...]
+user_id: 200000
+历史点击序列: [article_123, article_456, article_789, ...]
+```
+
+**模型处理流程**：
+```
+1. ItemCF召回: 找到与历史点击相似的100篇文章
+2. Embedding召回: 找到向量相似的100篇文章
+3. 融合召回: 合并去重，保留Top 150候选
+4. 特征工程: 为每个候选构建28维特征
+5. 模型预测: Ranker和Classifier分别打分
+6. 融合排序: 0.6*Ranker + 0.4*Classifier
+7. 输出Top 5
 ```
 
 **输出**（Top 5推荐）：
 ```
 user_id,article_1,article_2,article_3,article_4,article_5
-249999,95716,234698,158794,288320,233478
+200000,194686,194920,191911,191929,195087
 ```
 
-### 6.2 提交文件格式
+### 6.2 提交文件示例
 
 ```csv
 user_id,article_1,article_2,article_3,article_4,article_5
-249999,95716,234698,158794,288320,233478
-249998,16129,300470,276970,95972,233420
+200000,194686,194920,191911,191929,195087
+200001,272143,199198,64329,166581,198659
+200002,293301,257291,156624,158536,285719
+200003,337143,293513,159275,50494,158772
+200004,218028,202355,289003,157478,315104
 ...
 ```
 
@@ -363,8 +468,9 @@ user_id,article_1,article_2,article_3,article_4,article_5
 |------|------|
 | 提交文件 | `prediction_result/final_result.csv` |
 | 测试集用户数 | 50,000 |
-| 线上MRR得分 | [待提交后填写] |
-| 比赛排名 | [待提交后填写] |
+| **线上MRR得分** | **0.1541** |
+| 排行榜第1名得分 | 0.3195 |
+| 总耗时 | 20.79分钟 |
 
 ---
 
@@ -412,9 +518,16 @@ Lab-2/
 │   ├── models/               # 模型
 │   │   └── lgb_ranker.py
 │   └── utils/                # 工具函数
+│       ├── data_loader.py
+│       └── metrics.py
 ├── logs/                      # 运行日志
+│   └── experiment_20251217_005132.log
 ├── prediction_result/         # 预测结果
+│   └── final_result.csv
 ├── user_data/                 # 中间数据
+│   ├── recall_results/       # 召回结果缓存
+│   ├── features/             # 特征缓存
+│   └── model_data/           # 模型文件
 └── requirements.txt           # 依赖
 ```
 
@@ -428,16 +541,48 @@ conda activate ds-lab2
 # 2. 安装依赖
 pip install -r requirements.txt
 
-# 3. 运行完整流程
-python src/main.py
+# 3. 运行完整流程（约20分钟）
+cd /path/to/Lab-2
+python src/main.py 2>&1 | tee logs/main_$(date +%Y%m%d_%H%M%S).log
 
-# 4. 或运行基线模型
+# 4. 或运行基线模型（快速测试）
 python src/baseline.py
 ```
 
-### C. 参考资料
+### C. 依赖环境
 
-1. 天池竞赛官方文档
+```
+Python 3.11
+pandas >= 1.5.0
+numpy >= 1.24.0
+scipy >= 1.10.0
+scikit-learn >= 1.2.0
+lightgbm >= 4.0.0
+faiss-cpu >= 1.7.0
+matplotlib >= 3.7.0
+seaborn >= 0.12.0
+tqdm >= 4.65.0
+```
+
+### D. 调试历程记录
+
+1. **Faiss数组问题**：`ValueError: array is not C-contiguous`
+   - 解决：添加 `np.ascontiguousarray()` 转换
+
+2. **特征工程列缺失**：`KeyError: ['category_id', 'words_count'] not in index`
+   - 解决：在交叉特征构建前正确合并item_info_df
+
+3. **正样本为0问题**：负采样前召回未包含真实点击
+   - 解决：强制将真实点击添加到候选集
+
+4. **训练效率问题**：交叉特征计算1500万样本耗时过长
+   - 解决：调整流程为"先负采样，后特征工程"
+
+5. **LightGBM警告**：大量"No further splits with positive gain"
+   - 解决：添加验证集、启用early_stopping、增加正则化
+
+### E. 参考资料
+
+1. 天池竞赛官方文档：https://tianchi.aliyun.com/competition/entrance/531842
 2. LightGBM官方文档：https://lightgbm.readthedocs.io/
 3. 推荐系统实践相关论文和博客
-

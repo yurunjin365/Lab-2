@@ -38,6 +38,9 @@ def embedding_sim(item_emb_df, save_path='user_data/emb_i2i_sim.pkl', topk=20):
     item_ids = item_emb_df['article_id'].values
     emb_cols = [col for col in item_emb_df.columns if col.startswith('emb_')]
     emb_matrix = item_emb_df[emb_cols].values.astype('float32')
+    
+    # 确保数组是C连续的（faiss要求）
+    emb_matrix = np.ascontiguousarray(emb_matrix)
 
     # 归一化
     faiss.normalize_L2(emb_matrix)

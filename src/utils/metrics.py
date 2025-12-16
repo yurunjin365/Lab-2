@@ -111,8 +111,11 @@ def submit(recall_df, topk=5, model_name='baseline'):
     recall_df = recall_df.sort_values('pred_score', ascending=False)
     recall_df['rank'] = recall_df.groupby('user_id')['pred_score'].rank(ascending=False, method='first')
 
-    # 只保留Top K
-    sub_df = recall_df[recall_df['rank'] <= topk].set_index(['user_id', 'rank']).unstack(-1).reset_index()
+    # 只保留Top K，并只选择需要的列
+    top_df = recall_df[recall_df['rank'] <= topk][['user_id', 'click_article_id', 'rank']].copy()
+    
+    # Pivot: 将rank作为列，click_article_id作为值
+    sub_df = top_df.pivot(index='user_id', columns='rank', values='click_article_id').reset_index()
 
     # 重命名列
     sub_df.columns = ['user_id'] + [f'article_{i}' for i in range(1, topk + 1)]

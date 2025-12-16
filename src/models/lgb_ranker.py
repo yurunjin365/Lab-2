@@ -76,7 +76,7 @@ def train_lgb_ranker(train_df, val_df=None, params=None):
 
     Args:
         train_df: 训练集，需包含user_id, label列
-        val_df: 验证集（可选）
+        val_df: 验证集（可选，若不提供则自动划分20%作为验证）
         params: 模型参数（可选）
 
     Returns:
@@ -84,7 +84,7 @@ def train_lgb_ranker(train_df, val_df=None, params=None):
     """
     logger.info('开始训练LightGBM Ranker模型...')
 
-    # 默认参数
+    # 默认参数（优化版：防止过拟合，加速训练）
     if params is None:
         params = {
             'objective': 'lambdarank',
@@ -92,12 +92,15 @@ def train_lgb_ranker(train_df, val_df=None, params=None):
             'ndcg_eval_at': [5],
             'boosting_type': 'gbdt',
             'num_leaves': 31,
-            'learning_rate': 0.05,
-            'feature_fraction': 0.9,
+            'learning_rate': 0.1,  # 提高学习率，加速收敛
+            'feature_fraction': 0.8,  # 降低，增加随机性
             'bagging_fraction': 0.8,
             'bagging_freq': 5,
-            'verbose': 1,
-            'min_child_samples': 20,
+            'verbose': -1,  # 减少冗余输出
+            'min_child_samples': 50,  # 提高，防止过拟合
+            'lambda_l1': 0.1,  # L1正则化
+            'lambda_l2': 0.1,  # L2正则化
+            'min_gain_to_split': 0.01,  # 最小分裂增益阈值
         }
         
         # 尝试启用GPU加速
@@ -110,6 +113,19 @@ def train_lgb_ranker(train_df, val_df=None, params=None):
     # 特征列
     feature_cols = get_lgb_features(train_df)
 
+    # 如果没有验证集，从训练集划分20%作为验证集（按用户划分）
+    if val_df is None:
+        logger.info('未提供验证集，自动划分20%用户作为验证集...')
+        unique_users = train_df['user_id'].unique()
+        np.random.seed(42)
+        np.random.shuffle(unique_users)
+        val_user_count = int(len(unique_users) * 0.2)
+        val_users = set(unique_users[:val_user_count])
+        
+        val_df = train_df[train_df['user_id'].isin(val_users)].copy()
+        train_df = train_df[~train_df['user_id'].isin(val_users)].copy()
+        logger.info(f'训练集用户数: {len(unique_users) - val_user_count}, 验证集用户数: {val_user_count}')
+
     # 准备训练数据
     X_train = train_df[feature_cols]
     y_train = train_df['label']
@@ -118,32 +134,58 @@ def train_lgb_ranker(train_df, val_df=None, params=None):
     train_data = lgb.Dataset(X_train, label=y_train, group=group_train)
 
     # 准备验证数据
-    valid_sets = [train_data]
-    valid_names = ['train']
+    X_val = val_df[feature_cols]
+    y_val = val_df['label']
+    group_val = val_df.groupby('user_id').size().values
+    val_data = lgb.Dataset(X_val, label=y_val, group=group_val, reference=train_data)
 
-    if val_df is not None:
-        X_val = val_df[feature_cols]
-        y_val = val_df['label']
-        group_val = val_df.groupby('user_id').size().values
-        val_data = lgb.Dataset(X_val, label=y_val, group=group_val, reference=train_data)
-        valid_sets.append(val_data)
-        valid_names.append('valid')
+    valid_sets = [train_data, val_data]
+    valid_names = ['train', 'valid']
 
+    # 用于记录训练过程的指标
+    evals_result = {}
+    
+    # 自定义回调函数：每轮输出详细的训练指标到logger
+    def log_evaluation_to_logger(period=10):
+        def callback(env):
+            if env.iteration % period == 0 or env.iteration == env.end_iteration - 1:
+                result_str = f'Epoch: {env.iteration}'
+                for data_name, eval_name, result, _ in env.evaluation_result_list:
+                    result_str += f', {data_name}_{eval_name}: {result:.6f}'
+                logger.info(result_str)
+        return callback
+    
     # 训练模型
     logger.info('开始训练...')
+    logger.info(f'Learning Rate: {params.get("learning_rate", 0.1)}')
     model = lgb.train(
         params,
         train_data,
-        num_boost_round=1000,
+        num_boost_round=300,
         valid_sets=valid_sets,
         valid_names=valid_names,
         callbacks=[
-            lgb.early_stopping(stopping_rounds=50),
-            lgb.log_evaluation(period=50)
+            lgb.early_stopping(stopping_rounds=30),
+            lgb.record_evaluation(evals_result),
+            log_evaluation_to_logger(period=1)  # 每轮都输出到logger
         ]
     )
 
     logger.info('LightGBM Ranker训练完成')
+    
+    # 记录训练loss/metric摘要到日志
+    if evals_result:
+        logger.info('=== Ranker训练指标摘要 ===')
+        for dataset_name, metrics in evals_result.items():
+            for metric_name, values in metrics.items():
+                if len(values) > 0:
+                    logger.info(f'{dataset_name} - {metric_name}: 初始={values[0]:.6f}, 最终={values[-1]:.6f}, 最佳={max(values):.6f}')
+        # 保存完整训练历史
+        import json
+        history_path = 'user_data/model_data/lgb_ranker_history.json'
+        with open(history_path, 'w') as f:
+            json.dump(evals_result, f, indent=2)
+        logger.info(f'训练历史已保存: {history_path}')
 
     # 保存模型
     model_path = 'user_data/model_data/lgb_ranker.pkl'
@@ -161,7 +203,7 @@ def train_lgb_classifier(train_df, val_df=None, params=None):
 
     Args:
         train_df: 训练集，需包含label列
-        val_df: 验证集（可选）
+        val_df: 验证集（可选，若不提供则自动划分20%作为验证）
         params: 模型参数（可选）
 
     Returns:
@@ -169,19 +211,22 @@ def train_lgb_classifier(train_df, val_df=None, params=None):
     """
     logger.info('开始训练LightGBM Classifier模型...')
 
-    # 默认参数
+    # 默认参数（优化版：防止过拟合，加速训练）
     if params is None:
         params = {
             'objective': 'binary',
             'metric': 'auc',
             'boosting_type': 'gbdt',
             'num_leaves': 31,
-            'learning_rate': 0.05,
-            'feature_fraction': 0.9,
+            'learning_rate': 0.1,  # 提高学习率
+            'feature_fraction': 0.8,
             'bagging_fraction': 0.8,
             'bagging_freq': 5,
-            'verbose': 1,
-            'min_child_samples': 20,
+            'verbose': -1,  # 减少冗余输出
+            'min_child_samples': 50,  # 防止过拟合
+            'lambda_l1': 0.1,
+            'lambda_l2': 0.1,
+            'min_gain_to_split': 0.01,
         }
         
         # 尝试启用GPU加速
@@ -194,37 +239,70 @@ def train_lgb_classifier(train_df, val_df=None, params=None):
     # 特征列
     feature_cols = get_lgb_features(train_df)
 
+    # 如果没有验证集，从训练集划分20%作为验证集
+    if val_df is None:
+        logger.info('未提供验证集，自动划分20%数据作为验证集...')
+        from sklearn.model_selection import train_test_split
+        train_df, val_df = train_test_split(train_df, test_size=0.2, random_state=42, stratify=train_df['label'])
+        logger.info(f'训练集大小: {len(train_df)}, 验证集大小: {len(val_df)}')
+
     # 准备训练数据
     X_train = train_df[feature_cols]
     y_train = train_df['label']
     train_data = lgb.Dataset(X_train, label=y_train)
 
     # 准备验证数据
-    valid_sets = [train_data]
-    valid_names = ['train']
+    X_val = val_df[feature_cols]
+    y_val = val_df['label']
+    val_data = lgb.Dataset(X_val, label=y_val, reference=train_data)
 
-    if val_df is not None:
-        X_val = val_df[feature_cols]
-        y_val = val_df['label']
-        val_data = lgb.Dataset(X_val, label=y_val, reference=train_data)
-        valid_sets.append(val_data)
-        valid_names.append('valid')
+    valid_sets = [train_data, val_data]
+    valid_names = ['train', 'valid']
 
+    # 用于记录训练过程的指标
+    evals_result = {}
+    
+    # 自定义回调函数：每轮输出详细的训练指标到logger
+    def log_evaluation_to_logger(period=10):
+        def callback(env):
+            if env.iteration % period == 0 or env.iteration == env.end_iteration - 1:
+                result_str = f'Epoch: {env.iteration}'
+                for data_name, eval_name, result, _ in env.evaluation_result_list:
+                    result_str += f', {data_name}_{eval_name}: {result:.6f}'
+                logger.info(result_str)
+        return callback
+    
     # 训练模型
     logger.info('开始训练...')
+    logger.info(f'Learning Rate: {params.get("learning_rate", 0.1)}')
     model = lgb.train(
         params,
         train_data,
-        num_boost_round=1000,
+        num_boost_round=300,
         valid_sets=valid_sets,
         valid_names=valid_names,
         callbacks=[
-            lgb.early_stopping(stopping_rounds=50),
-            lgb.log_evaluation(period=50)
+            lgb.early_stopping(stopping_rounds=30),
+            lgb.record_evaluation(evals_result),
+            log_evaluation_to_logger(period=1)  # 每轮都输出到logger
         ]
     )
 
     logger.info('LightGBM Classifier训练完成')
+    
+    # 记录训练loss/metric摘要到日志
+    if evals_result:
+        logger.info('=== Classifier训练指标摘要 ===')
+        for dataset_name, metrics in evals_result.items():
+            for metric_name, values in metrics.items():
+                if len(values) > 0:
+                    logger.info(f'{dataset_name} - {metric_name}: 初始={values[0]:.6f}, 最终={values[-1]:.6f}, 最佳={max(values):.6f}')
+        # 保存完整训练历史
+        import json
+        history_path = 'user_data/model_data/lgb_classifier_history.json'
+        with open(history_path, 'w') as f:
+            json.dump(evals_result, f, indent=2)
+        logger.info(f'训练历史已保存: {history_path}')
 
     # 保存模型
     model_path = 'user_data/model_data/lgb_classifier.pkl'
