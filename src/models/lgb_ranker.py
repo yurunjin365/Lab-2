@@ -4,6 +4,8 @@ LightGBM排序模型
 包含两种模型：
 1. LightGBM Ranker：学习排序任务，使用lambdarank目标函数
 2. LightGBM Classifier：二分类任务，预测点击概率
+
+支持GPU加速（需要安装lightgbm GPU版本）
 """
 import numpy as np
 import pandas as pd
@@ -14,6 +16,36 @@ import pickle
 import os
 
 logger = logging.getLogger()
+
+# 检测GPU是否可用
+def check_gpu_available():
+    """检测LightGBM GPU是否可用"""
+    try:
+        # 尝试创建一个小的GPU数据集来测试
+        import tempfile
+        test_data = lgb.Dataset(np.random.rand(100, 10), label=np.random.randint(0, 2, 100))
+        params = {'device': 'gpu', 'gpu_platform_id': 0, 'gpu_device_id': 0, 'verbose': -1}
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lgb.train(params, test_data, num_boost_round=1, verbose_eval=False)
+        return True
+    except Exception as e:
+        logger.warning(f'LightGBM GPU不可用: {e}')
+        return False
+
+# 全局GPU可用标志（只检测一次）
+_GPU_AVAILABLE = None
+
+def is_gpu_available():
+    """获取GPU可用状态（缓存结果）"""
+    global _GPU_AVAILABLE
+    if _GPU_AVAILABLE is None:
+        logger.info('检测LightGBM GPU支持...')
+        _GPU_AVAILABLE = check_gpu_available()
+        if _GPU_AVAILABLE:
+            logger.info('✅ LightGBM GPU加速已启用')
+        else:
+            logger.info('⚠️ LightGBM GPU不可用，使用CPU训练')
+    return _GPU_AVAILABLE
 
 
 def get_lgb_features(df):
@@ -67,6 +99,13 @@ def train_lgb_ranker(train_df, val_df=None, params=None):
             'verbose': 1,
             'min_child_samples': 20,
         }
+        
+        # 尝试启用GPU加速
+        if is_gpu_available():
+            params['device'] = 'gpu'
+            params['gpu_platform_id'] = 0
+            params['gpu_device_id'] = 0
+            logger.info('Ranker模型使用GPU训练')
 
     # 特征列
     feature_cols = get_lgb_features(train_df)
@@ -144,6 +183,13 @@ def train_lgb_classifier(train_df, val_df=None, params=None):
             'verbose': 1,
             'min_child_samples': 20,
         }
+        
+        # 尝试启用GPU加速
+        if is_gpu_available():
+            params['device'] = 'gpu'
+            params['gpu_platform_id'] = 0
+            params['gpu_device_id'] = 0
+            logger.info('Classifier模型使用GPU训练')
 
     # 特征列
     feature_cols = get_lgb_features(train_df)
