@@ -4,3 +4,5 @@
 /prediction_result
 /results
 /CLAUDE.md
+
+__pycache__

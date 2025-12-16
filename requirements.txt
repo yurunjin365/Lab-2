@@ -1,35 +1,53 @@
-# 推荐系统实验环境依赖
-# Python 3.8+
+# 新闻推荐系统实验依赖 - 最小化稳定版本
+# Python 3.8+ (Python 3.8-3.11 测试通过)
+# Conda环境: ds-lab2
+
+# ============ 核心依赖（必需） ============
 
 # 数据处理
-pandas>=1.3.0
-numpy>=1.21.0
-scipy>=1.7.0
+pandas==1.5.3
+numpy==1.23.5
+scipy==1.10.1
 
 # 机器学习
-scikit-learn>=1.0.0
-lightgbm>=3.3.0
+scikit-learn==1.2.2
+lightgbm==3.3.5
 
-# 深度学习
-tensorflow>=2.8.0
-keras>=2.8.0
+# 进度条
+tqdm==4.65.0
 
-# 推荐系统相关
-deepctr>=0.9.0
-deepmatch>=0.2.0
-gensim>=4.0.0
+# ============ 可选依赖（推荐） ============
 
-# 向量检索
-faiss-cpu>=1.7.0
+# 向量检索 - 用于加速Embedding召回
+# 如果安装失败，代码会自动降级为numpy计算
+faiss-cpu==1.7.4
 
-# 可视化
-matplotlib>=3.4.0
-seaborn>=0.11.0
+# 可视化 - 用于数据分析
+matplotlib==3.7.1
+seaborn==0.12.2
 
-# 工具
-tqdm>=4.62.0
-pickle5>=0.0.11
+# ============ 注意事项 ============
+# 1. 如果 faiss-cpu 安装失败，可以跳过，代码会自动使用numpy
+# 2. matplotlib 和 seaborn 只用于数据分析，不影响模型训练
+# 3. 不需要 tensorflow、keras、deepctr 等深度学习框架
+# 4. 不需要 pickle5（Python 3.8+ 已内置）
+# 5. 不需要 h5py、jupyter（非必需）
 
-# Jupyter支持（可选）
-jupyter>=1.0.0
-ipykernel>=6.0.0
+# ============ 安装建议 ============
+# 方式1：全部安装（推荐）
+#   pip install -r requirements.txt
+
+# 方式2：只安装核心依赖（最小化）
+#   pip install pandas==1.5.3 numpy==1.23.5 scipy==1.10.1 scikit-learn==1.2.2 lightgbm==3.3.5 tqdm==4.65.0
+
+# 方式3：如果遇到编译错误，可以使用conda安装二进制包
+#   conda install pandas=1.5.3 numpy=1.23.5 scipy=1.10.1 scikit-learn=1.2.2 lightgbm=3.3.5 tqdm=4.65.0 -c conda-forge
+
+# ============ 可选的深度学习扩展 ============
+# 如果后续想尝试深度学习模型（如DIN、YoutubeDNN），可选安装：
+# tensorflow==2.10.1
+# keras==2.10.0
+# deepctr==0.9.3
+# deepmatch==0.2.0
+# gensim==4.3.0
+# 注意：这些包需要编译环境，且可能有版本冲突，非核心实验不建议安装
