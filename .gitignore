@@ -3,6 +3,8 @@
 /user_data
 /prediction_result
 /results
+
+.claude
 /CLAUDE.md
 
 __pycache__
